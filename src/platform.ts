@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import type { Page } from "playwright";
 import { openNextdoor, loggedIn, textSnapshot, diagnose } from "./browser.js";
 import { extractEntities, discoverNavigation } from "./extract.js";
@@ -43,11 +44,15 @@ async function readSurface(surface: Surface, options: { query?: string; limit?: 
   const url = surface === "search" && options.query ? `${route}?query=${encodeURIComponent(options.query)}` : route;
   const page = await openNextdoor(url);
   await ensureLogin(page);
-  await page.waitForTimeout(300);
+  await page.waitForFunction(() => Boolean(
+    document.querySelector('article, [role="article"], [data-testid="feed-item-card"], [role="listitem"], main li')
+  ), undefined, { timeout: 5_000 }).catch(() => undefined);
+  await page.waitForTimeout(150);
   const health = await diagnose(page);
   const expectedPath = new URL(url, "https://nextdoor.com").pathname.replace(/\/$/, "");
   const actualPath = new URL(page.url()).pathname.replace(/\/$/, "");
-  if (actualPath !== expectedPath) throw new Error(`Nextdoor routed ${surface} to an unexpected surface (${actualPath || "/"} instead of ${expectedPath || "/"}). Run capability_inventory or switch account identity.`);
+  const canonicalProfile = surface === "profile" && actualPath.startsWith("/profile/");
+  if (actualPath !== expectedPath && !canonicalProfile) throw new Error(`Nextdoor routed ${surface} to an unexpected surface (${actualPath || "/"} instead of ${expectedPath || "/"}). Run capability_inventory or switch account identity.`);
   if (health.notFound) throw new Error(`Nextdoor no longer exposes the ${surface} surface at ${url}. Run capability_inventory to rediscover navigation.`);
   const entities = await extractEntities(page, options.limit || 50);
   audit({ event: "surface_read", surface, url: page.url(), count: entities.length });
@@ -83,8 +88,15 @@ export async function inspectUrl(rawUrl: string, includeScreenshot = false) {
   const page = await openNextdoor(url.pathname + url.search);
   await ensureLogin(page);
   await page.waitForTimeout(1000);
+  if (/^\/(p|g|page)\/|^\/for_sale_and_free\/[^/]+\//.test(new URL(page.url()).pathname)) {
+    await page.waitForFunction(() => {
+      const body = (document.body?.innerText || "").trim();
+      return body.length > 700 || /group not found|listing not found|page not found/i.test(body);
+    }, undefined, { timeout: 5_000 }).catch(() => undefined);
+  }
   const health = await diagnose(page);
   const entities = await extractEntities(page, 50);
+  const visibleText = await textSnapshot(page, 6000);
   let screenshotPath: string | undefined;
   if (includeScreenshot) {
     const dir = path.join(dataDir, "diagnostics");
@@ -93,11 +105,53 @@ export async function inspectUrl(rawUrl: string, includeScreenshot = false) {
     await page.screenshot({ path: screenshotPath, fullPage: false });
   }
   audit({ event: "url_inspected", url: page.url(), entityCount: entities.length, screenshot: Boolean(screenshotPath) });
-  return { url: page.url(), health, entities, screenshotPath };
+  return { url: page.url(), health, entities, visibleText, screenshotPath };
+}
+
+export async function findOwnPost(text: string) {
+  const page = await openNextdoor("/profile/");
+  await ensureLogin(page);
+  const exactText = page.getByText(text, { exact: true }).filter({ visible: true }).first();
+  await exactText.waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
+  if (!(await exactText.count())) throw new Error("No visible post on the authenticated profile matched the exact requested text.");
+  const card = page.locator('[data-testid="feed-item-card"]').filter({ has: exactText }).first();
+  const share = card.getByTestId("share-button").filter({ visible: true }).first();
+  if (!(await share.count())) throw new Error("The matched post did not expose its share control.");
+  await share.click();
+  const shareDialog = page.getByRole("dialog").filter({ visible: true }).first();
+  await shareDialog.waitFor({ state: "visible", timeout: 5_000 }).catch(() => undefined);
+  const facebookShare = shareDialog.locator('a[href*="facebook.com/dialog/share"]').first();
+  const shareHref = await facebookShare.count() ? await facebookShare.getAttribute("href") : null;
+  const postUrl = (() => {
+    try { return shareHref ? new URL(shareHref).searchParams.get("href") : null; }
+    catch { return null; }
+  })();
+  if (!postUrl) throw new Error("Nextdoor did not expose a direct URL for the matched post.");
+  const target = new URL(postUrl);
+  if (!/(^|\.)nextdoor\.com$/.test(target.hostname) || !target.pathname.startsWith("/p/")) throw new Error("Nextdoor returned an invalid post URL.");
+  await page.goto(target.href, { waitUntil: "commit", timeout: 20_000 });
+  await page.getByText(text, { exact: true }).filter({ visible: true }).first().waitFor({ state: "visible", timeout: 8_000 });
+  const health = await diagnose(page);
+  const matches = await page.getByText(text, { exact: true }).filter({ visible: true }).count();
+  if (!matches) throw new Error("The resolved post URL did not contain the requested text.");
+  audit({ event: "own_post_resolved", url: page.url() });
+  return { url: page.url(), textVerified: true, health };
 }
 
 export function validateFiles(paths: string[]): string[] {
-  const allowed = (process.env.NEXTDOOR_ALLOWED_FILES || `${process.env.HOME || ""}/Pictures,${process.env.HOME || ""}/Downloads`).split(",").map(x => fs.realpathSync(path.resolve(x)));
+  const explicit = process.env.NEXTDOOR_ALLOWED_FILES;
+  const configured = explicit || [path.join(os.homedir(), "Pictures"), path.join(os.homedir(), "Downloads")].join(",");
+  const allowed = configured.split(",").map(x => x.trim()).filter(Boolean).flatMap(directory => {
+    try {
+      const resolved = fs.realpathSync(path.resolve(directory));
+      if (!fs.statSync(resolved).isDirectory()) throw new Error(`Configured attachment location is not a directory: ${resolved}`);
+      return [resolved];
+    } catch (error) {
+      if (!explicit && (error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  });
+  if (!allowed.length) throw new Error("NEXTDOOR_ALLOWED_FILES does not contain an attachment directory.");
   const permitted = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".pdf", ".txt"]);
   return paths.map(file => {
     const resolved = fs.realpathSync(path.resolve(file));

@@ -13,8 +13,8 @@ export const profileDir = process.env.NEXTDOOR_PROFILE_DIR || path.join(os.homed
 
 function browserOptions() {
   const configured = process.env.NEXTDOOR_BROWSER_CHANNEL;
-  // Use the user's installed, normal Google Chrome by default. An empty or
-  // explicit "chromium" value opts back into Playwright's bundled browser.
+  // Use the user's installed, normal Google Chrome by default. An explicit
+  // "chromium" value opts back into Playwright's bundled browser.
   return configured === "chromium" ? {} : { channel: configured || "chrome" };
 }
 
@@ -174,7 +174,7 @@ export async function diagnose(p: Page) {
   const body = await textSnapshot(p, 3000);
   return {
     url: p.url(), title: await p.title(),
-    notFound: /can.t seem to find that page|page not found/i.test(body),
+    notFound: /can.t seem to find that page|page not found|group not found|listing not found/i.test(body),
     verificationRequired: /captcha|verify you are human|security check/i.test(body),
     permissionDenied: /don.t have permission|access denied|not authorized/i.test(body)
   };

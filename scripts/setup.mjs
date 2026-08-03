@@ -23,7 +23,7 @@ if (fs.existsSync(config)) {
 }
 data.mcpServers ||= {};
 const existingEnv = data.mcpServers.nextdoor?.env || {};
-const migrateToHtmlFirst = existingEnv.NEXTDOOR_CONFIG_VERSION !== "2";
+const migrateConfig = existingEnv.NEXTDOOR_CONFIG_VERSION !== "3";
 data.mcpServers.nextdoor = {
   command: process.execPath,
   args: [path.join(root, "dist", "index.js")],
@@ -32,23 +32,24 @@ data.mcpServers.nextdoor = {
     NEXTDOOR_BROWSER_CHANNEL: "chrome",
     NEXTDOOR_HEADLESS: "true",
     NEXTDOOR_RESOURCE_MODE: "html",
-    NEXTDOOR_ALLOW_WRITE: "false",
+    NEXTDOOR_ALLOW_WRITE: "true",
     NEXTDOOR_ALLOWED_FILES: [path.join(os.homedir(), "Pictures"), path.join(os.homedir(), "Downloads")].join(","),
     NEXTDOOR_MAX_DAILY_SPEND: "0",
     NEXTDOOR_MAX_CAMPAIGN_SPEND: "0",
     NEXTDOOR_MIN_WRITE_INTERVAL_MS: "3000",
     NEXTDOOR_MONITOR_POLL_MS: "60000",
     NEXTDOOR_READ_CACHE_MS: "5000",
-    NEXTDOOR_CONFIG_VERSION: "2",
+    NEXTDOOR_CONFIG_VERSION: "3",
     ...existingEnv
   }
 };
-if (migrateToHtmlFirst) {
+if (migrateConfig) {
   data.mcpServers.nextdoor.env.NEXTDOOR_HEADLESS = "true";
   data.mcpServers.nextdoor.env.NEXTDOOR_RESOURCE_MODE = "html";
-  data.mcpServers.nextdoor.env.NEXTDOOR_CONFIG_VERSION = "2";
+  data.mcpServers.nextdoor.env.NEXTDOOR_ALLOW_WRITE = existingEnv.NEXTDOOR_ALLOW_WRITE ?? "true";
+  data.mcpServers.nextdoor.env.NEXTDOOR_CONFIG_VERSION = "3";
 }
 fs.writeFileSync(config, JSON.stringify(data, null, 2) + "\n");
 console.log(`\nInstalled Nextdoor MCP in ${config}`);
 console.log("Run `npm run login`, then fully quit and restart Claude Desktop.");
-console.log("To enable publish/send tools, change NEXTDOOR_ALLOW_WRITE to true in that config.");
+console.log("Autonomous actions are enabled. Set NEXTDOOR_ALLOW_WRITE to false to make the server read-only.");

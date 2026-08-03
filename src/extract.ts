@@ -3,10 +3,10 @@ import type { Page } from "playwright";
 import type { Entity } from "./types.js";
 
 export async function extractEntities(page: Page, limit = 50): Promise<Entity[]> {
-  const rows = await page.locator('article, [role="article"], [role="listitem"], main li').evaluateAll((nodes, max) =>
+  const rows = await page.locator('article, [role="article"], [data-testid="feed-item-card"], [role="listitem"], main li').evaluateAll((nodes, max) =>
     nodes.slice(0, max as number).map(node => {
       const el = node as HTMLElement;
-      const link = el.querySelector('a[href]') as HTMLAnchorElement | null;
+      const link = (el.querySelector('a[href*="/p/"]') || el.querySelector('a[href]')) as HTMLAnchorElement | null;
       const time = el.querySelector('time');
       const heading = el.querySelector('h1,h2,h3,h4,[role="heading"]');
       const img = el.querySelector('img') as HTMLImageElement | null;
@@ -29,7 +29,8 @@ export async function extractEntities(page: Page, limit = 50): Promise<Entity[]>
   // returning the entire UI: split meaningful visible lines into bounded,
   // stable chunks and discard navigation chrome and placeholders.
   const main = page.locator("main").first();
-  const text = await main.count() ? await main.innerText() : await page.locator("body").innerText();
+  let text = await main.count() ? await main.innerText() : "";
+  if (text.trim().length < 200) text = await page.locator("body").innerText();
   const ignored = /^(skip to .+|home|settings|help center|invite neighbors|post|for you|recent|nearby|trending|shortcuts|chats|search for|groups|events|alerts|ask|local news|for sale & free)$/i;
   const lines = text.split("\n").map(x => x.trim()).filter(x => x && x !== " " && !ignored.test(x));
   const chunks: string[] = [];

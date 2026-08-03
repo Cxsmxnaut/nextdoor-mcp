@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { openNextdoor, loggedIn, textSnapshot, writesAllowed } from "./browser.js";
+import { validateFiles } from "./platform.js";
 
 async function ensureLogin(p: Page) {
   if (!(await loggedIn(p))) throw new Error("Nextdoor login is required. Run `npm run login`, sign in in the opened browser, then retry.");
@@ -18,7 +19,7 @@ export async function status() {
   return {
     loggedIn: await loggedIn(p), url: p.url(), writesEnabled: writesAllowed(),
     browserChannel: process.env.NEXTDOOR_BROWSER_CHANNEL || "chrome",
-    resourceMode: process.env.NEXTDOOR_RESOURCE_MODE || "lean",
+    resourceMode: process.env.NEXTDOOR_RESOURCE_MODE || "html",
     dailySpendLimit: Number(process.env.NEXTDOOR_MAX_DAILY_SPEND || 0),
     campaignSpendLimit: Number(process.env.NEXTDOOR_MAX_CAMPAIGN_SPEND || 0)
   };
@@ -32,6 +33,7 @@ export async function search(query: string) {
 }
 
 export async function draftPost(body: string, imagePaths: string[] = []) {
+  if (!writesAllowed()) throw new Error("Drafting is disabled. Set NEXTDOOR_ALLOW_WRITE=true and restart Claude Desktop.");
   const p = await openNextdoor("/news_feed/");
   await ensureLogin(p);
   const composer = await firstVisible(p, [
@@ -41,13 +43,14 @@ export async function draftPost(body: string, imagePaths: string[] = []) {
   await composer.click();
   const editor = await firstVisible(p, ['textarea', '[contenteditable="true"]']);
   await editor.fill(body);
-  if (imagePaths.length) {
+  const files = imagePaths.length ? validateFiles(imagePaths) : [];
+  if (files.length) {
     const input = p.locator('input[type="file"]').first();
     if (!(await input.count())) throw new Error("The post composer did not expose an image picker.");
-    await input.setInputFiles(imagePaths);
+    await input.setInputFiles(files);
     await p.waitForTimeout(1000);
   }
-  return { drafted: true, imageCount: imagePaths.length, preview: body, note: "Draft is open in the browser. Call publish_post to submit it." };
+  return { drafted: true, imageCount: files.length, preview: body, note: "Draft is open in the browser. Use perform_action(create_post) for autonomous publishing." };
 }
 
 export async function publishPost() {
@@ -76,6 +79,7 @@ export async function listChats() {
 }
 
 export async function draftChat(recipient: string, message: string) {
+  if (!writesAllowed()) throw new Error("Drafting is disabled. Set NEXTDOOR_ALLOW_WRITE=true and restart Claude Desktop.");
   const p = await openNextdoor("/inbox/");
   await ensureLogin(p);
   const newMessage = await firstVisible(p, ['button:has-text("New message")', '[role="button"]:has-text("New message")']);

@@ -4,15 +4,28 @@ import { load, mutate, audit } from "./store.js";
 
 const ttlMs = 10 * 60_000;
 
-export function preview(kind: string, risk: Risk, summary: string, payload: Record<string, unknown>): PendingAction {
+function createAction(kind: string, risk: Risk, summary: string, payload: Record<string, unknown>): PendingAction {
   const now = Date.now();
-  const action: PendingAction = {
+  return {
     id: crypto.randomUUID(), kind, risk, summary, payload,
-    createdAt: new Date(now).toISOString(), expiresAt: new Date(now + ttlMs).toISOString(),
+    createdAt: new Date(now).toISOString(), expiresAt: new Date(now + ttlMs).toISOString()
+  };
+}
+
+export function preview(kind: string, risk: Risk, summary: string, payload: Record<string, unknown>): PendingAction {
+  const action: PendingAction = {
+    ...createAction(kind, risk, summary, payload),
     approvalToken: crypto.randomBytes(18).toString("base64url"), executionState: "pending"
   };
   mutate(state => { state.actions[action.id] = action; });
-  audit({ event: "action_previewed", actionId: action.id, kind, risk, summary });
+  audit({ event: "action_previewed", actionId: action.id, kind, risk, summaryLength: summary.length });
+  return action;
+}
+
+export function startAutonomous(kind: string, risk: Risk, summary: string, payload: Record<string, unknown>): PendingAction {
+  const action: PendingAction = { ...createAction(kind, risk, summary, payload), executionState: "executing" };
+  mutate(state => { state.actions[action.id] = action; });
+  audit({ event: "action_started", actionId: action.id, kind, risk, mode: "autonomous", summaryLength: summary.length });
   return action;
 }
 
